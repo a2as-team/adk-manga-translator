@@ -1,0 +1,279 @@
+manifest:
+  version: "0.1.3"
+  schema: https://a2as.org/cert/schema
+  subject:
+    name: hrithik-naik/adk-manga-translator
+    source: https://github.com/hrithik-naik/adk-manga-translator
+    branch: main
+    commit: "8bdf3c2c"
+    scope: [manager/agent.py, manager/sub_agents/manga_cleaner/agent.py, manager/sub_agents/recreator/agent.py, manager/sub_agents/translator/agent.py,
+      manager/tools/tools.py]
+  issued:
+    by: A2AS.org
+    at: '2026-02-11T16:45:38Z'
+    url: https://a2as.org/certified/agents/hrithik-naik/adk-manga-translator
+  signatures:
+    digest: sha256:QbD2XU5aDIr_hGOb6Whe8avMDvpHZw9KSuw38erYL6o
+    key: ed25519:lh6IObm7I0XLzzr8DQlCb1IWe5X0Fkb7-bE5t_Jixx4
+    sig: ed25519:RcRplExEyss8IDM-S8P2MqbKyMW6Yw0fh04XAtZWPBMMiJzjFbrzD4tMgGkNaZ-ka3UAYs5o4NDwMXlp0f5HAw
+
+agents:
+  manga_cleaner:
+    type: instance
+    models: [gemini-2.0-flash]
+    tools: [get_nerd_joke]
+    params:
+      name: manga_cleaner
+      description: 'A manga that clears the manga using the tools '
+      instruction: [You are a Manga cleaner agent that gets the link and cleans the manga panels., 'when asked to clean a
+          manga:', '1.Use the get_nerd_joke tool to fetch a joke about the requested link which is in format manga link :',
+        'Example response format:', '"Output format:', 'Predictions:<JOKE>', 'JAPANESE:', <LINK>]
+      output_key: current_post
+  proof_reader:
+    type: instance
+    models: [gemini-2.0-flash]
+    tools: [recreate_manga_panel, show_image]
+    params:
+      name: proof_reader
+      description: An agent that recreates cleaned manga panels by rendering English-translated text onto the original image
+        using the provided content.
+      instruction: [You are a manga rendering agent., '1. First, use the recreate_manga_panel tool to render the manga panel.',
+        '### OUTPUT', '- Respond only with: `Manga panel successfully recreated.`', '- image_path:<IMAGE_PATH>', '- status:<Status>',
+        'After Output:', immediately call the show_image tool using the image_path returned from recreate_manga_panel.]
+      output_key: current_post
+  refinement_loop:
+    type: instance
+    params:
+      name: PostRefinementLoop
+      max_iterations: "1"
+      description: Iteratively reviews and refines until the translation meets the requirements
+      sub_agents: [translator]
+  root_agent:
+    type: instance
+    models: [gemini-2.0-flash]
+    tools: [agent_tool]
+    params:
+      name: manager
+      description: Manager agent
+      instruction: [You are a manager agent that is responsible for overseeing the work of the other agents., Always delegate
+          the task to the appropriate agent. Use your best judgement, to determine which agent to delegate to., 'You are responsible
+          for delegating tasks to the following agent:', -manga_cleaner]
+      sub_agents: [workflow]
+  translator:
+    type: instance
+    models: [gemini-2.0-flash]
+    params:
+      name: translator_agent
+      description: An agent that converts Japanese to English with review feedback
+      instruction: [You are a professional Japanese-to-English translator and editor for a Manga Translation Team., 'Your
+          task happens in **two stages**:', '---', '### STAGE 1: Initial Translation', 'When no review feedback is provided,
+          you must:', '- The output should not have any text other than the translation.', '- Start the translation from [1],
+          ignore everthing before it.', '- Maintain 3 newlines(', ) between each text region.(text regions start with numbers),
+        '- Translate the provided Japanese content into fluent, natural English.', '- Maintain cultural context and intent.',
+        '- Make sure the translation will not have any special characters.', '- Ensure the translated content is clear and
+          grammatically correct.', '- Make sure there are 3 newlines between each text region.', '**OUTPUT FORMAT FOR STAGE
+          1:**', 'Translation:', 'Predictions: <JOKE>', 'JAPANESE:', Translated <LINK> to English, '---', '### STAGE 2: Proofreading
+          & Refinement', 'If review feedback is present, you must:', '- Carefully revise the **initial translation** based
+          on the feedback.', '- Improve grammar, readability, fluency, tone, and cultural appropriateness.', '- Do not alter
+          the original meaning or intent.', '**OUTPUT FORMAT FOR STAGE 2:**', 'After Proofreading:', 'Predictions: <JOKE>',
+        'JAPANESE:', Refined translation of <LINK> to English, '---', '### INPUTS', '**Initial Translation (if applicable):**',
+        '{current_post}', '---', '### FINAL INSTRUCTIONS', '- Output ONLY the correctly formatted result for the current stage.',
+        '- Do NOT include explanations, justification, or extra commentary.']
+      output_key: current_post
+  workflow:
+    type: instance
+    params:
+      name: LinkedInPostGenerationPipeline
+      description: 'Converts a manga panel from japanese to english input: manga link:<link>'
+      sub_agents: [manga_cleaner, refinement_loop, proof_reader]
+
+models:
+  gemini-2.0-flash:
+    type: literal
+    agents: [translator, manga_cleaner, proof_reader, root_agent]
+
+tools:
+  agent_tool:
+    type: agent
+    agents: [root_agent]
+    params:
+      wrapper: AgentTool
+  get_nerd_joke:
+    type: function
+    agents: [manga_cleaner]
+    params:
+      description: Process the manga and return number of predictions as a nerdy joke.
+  recreate_manga_panel:
+    type: function
+    agents: [proof_reader]
+    params:
+      description: Simulates recreating a cleaned manga panel with translated text.
+  show_image:
+    type: function
+    agents: [proof_reader]
+    params:
+      description: |-
+        Opens the image using the default image viewer (locally).
+        Intended for local preview of rendered manga panels.
+
+teams:
+  refinement_loop:
+    type: loop
+    agents: [refinement_loop, translator]
+  root_agent:
+    type: hierarchy
+    agents: [root_agent, workflow]
+  workflow:
+    type: sequential
+    agents: [workflow, manga_cleaner, refinement_loop, proof_reader]
+
+imports:
+  Agent: google.adk.agents.Agent
+  agent: agent
+  AgentTool: google.adk.tools.agent_tool.AgentTool
+  cv2: cv2
+  datetime: datetime.datetime
+  genai: google.generativeai
+  get_current_time: tools.tools.get_current_time
+  Image: PIL.Image
+  ImageDraw: PIL.ImageDraw
+  ImageFont: PIL.ImageFont
+  LlmAgent: google.adk.agents.LlmAgent
+  load_dotenv: dotenv.load_dotenv
+  LoopAgent: google.adk.agents.LoopAgent
+  manga_cleaner: sub_agents.manga_cleaner.agent.manga_cleaner
+  np: numpy
+  os: os
+  Path: pathlib.Path
+  proof_reader: sub_agents.recreator.agent.proof_reader
+  random: random
+  re: re
+  requests: requests
+  SequentialAgent: google.adk.agents.SequentialAgent
+  ToolContext: google.adk.tools.ToolContext
+  translator: sub_agents.translator.agent.translator
+  urlparse: urllib.parse.urlparse
+  YOLO: ultralytics.YOLO
+
+functions:
+  _find_font_size_to_fit:
+    type: sync
+    module: manager.sub_agents.recreator.agent
+    args: [text, width, height, font_path, min_size, max_size]
+  _get_line_height:
+    type: sync
+    module: manager.sub_agents.recreator.agent
+    args: [font, draw]
+  _text_fits_without_breaking:
+    type: sync
+    module: manager.sub_agents.recreator.agent
+    args: [text, width, height, font, draw]
+  _typeset_text:
+    type: sync
+    module: manager.sub_agents.recreator.agent
+    args: [image, text, bbox, font_path]
+  _wrap_text_no_break:
+    type: sync
+    module: manager.sub_agents.recreator.agent
+    args: [text, width, font, draw]
+  ensure_local_image:
+    type: sync
+    module: manager.sub_agents.manga_cleaner.agent
+    args: [image_path]
+    params:
+      returns: str
+  get_current_time:
+    type: sync
+    module: manager.tools.tools
+    params:
+      returns: dict
+  get_nerd_joke:
+    type: sync
+    module: manager.sub_agents.manga_cleaner.agent
+    args: [link, tool_context]
+    params:
+      returns: dict
+  process:
+    type: sync
+    module: manager.sub_agents.manga_cleaner.agent
+    args: [data]
+    params:
+      returns: dict
+  recreate_manga_panel:
+    type: sync
+    module: manager.sub_agents.recreator.agent
+    args: [current_post, tool_context]
+    params:
+      returns: dict
+  show_image:
+    type: sync
+    module: manager.sub_agents.recreator.agent
+    args: [image_path, tool_context]
+    params:
+      returns: dict
+  translate_manga:
+    type: sync
+    module: manager.sub_agents.recreator.agent
+    args: [image_path, translations, output_path]
+  whitening:
+    type: sync
+    module: manager.sub_agents.manga_cleaner.agent
+    args: [image_path]
+
+variables:
+  GOOGLE_API_KEY:
+    type: env
+    params:
+      caller: [os.getenv, genai.configure]
+      path: [env_path]
+
+files:
+  .env:
+    type: literal
+    actions: [read]
+    params:
+      path: [Path.resolve.parent.parent]
+  currentpost.txt:
+    type: literal
+    actions: [write]
+    params:
+      caller: [open]
+      alias: [file]
+  image_path:
+    type: variable
+    actions: [read]
+    params:
+      caller: [open, os.path.exists, Image.open]
+      alias: [image_file]
+  local_path:
+    type: variable
+    actions: [write]
+    params:
+      caller: [open]
+      alias: [f]
+  manga_links.txt:
+    type: literal
+    actions: [write, read]
+    params:
+      caller: [open]
+      alias: [file]
+  output_dir:
+    type: variable
+    actions: [read]
+    params:
+      caller: [os.makedirs]
+  output_path:
+    type: variable
+    actions: [read]
+    params:
+      caller: [os.path.abspath, pil_image.save]
+  parsed_url.path:
+    type: variable
+    actions: [read]
+    params:
+      caller: [os.path.basename]
+  path:
+    type: variable
+    actions: [read]
+    params:
+      caller: [os.path.exists]
